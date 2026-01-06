@@ -5,23 +5,19 @@ import numpy as np
 # Initialize pygame
 pygame.init()
 
-# Define colors
+# Colors
 WHITE = (255, 255, 255)
 RED = (213, 50, 80)
 GREEN = (0, 255, 0)
-BLUE = (50, 153, 213)
 BLACK = (0, 0, 0)
 
-# Game parameters
-SNAKE_BLOCK = 20  # Increased block size for visibility
-SNAKE_SPEED = 45  # Increased speed
+# Game settings
+SNAKE_BLOCK = 20
+SNAKE_SPEED = 45
+WIDTH, HEIGHT = 800, 600
 
-# Set the display to windowed mode with a fixed size
-WIDTH, HEIGHT = 800, 600  # Moderately larger window
 display = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption('Snake Game with Q-learning')
-
-# Clock
+pygame.display.set_caption("Snake Game with Q-Learning")
 clock = pygame.time.Clock()
 
 # Q-learning parameters
@@ -30,45 +26,30 @@ GAMMA = 0.9
 EPSILON = 1.0
 EPSILON_DECAY = 0.995
 MIN_EPSILON = 0.01
-ACTIONS = ["UP", "DOWN", "LEFT", "RIGHT"]
 
-# Initialize Q-table
+ACTIONS = ["UP", "DOWN", "LEFT", "RIGHT"]
 q_table = {}
 
-# Initialize generation counter and high score
-generation_counter = 0
+generation = 0
 high_score = 0
 
-# Cooldown settings
-cooldown_time = 30  # Reduced cooldown time for increased speed
-last_move_time = 0
-
-# Exploration settings
-visited_positions = set()  # Track visited positions
-
-
-# Initialize the game state
-def initialize_game():
-    snake = [(WIDTH // 2, HEIGHT // 2)]
-    direction = random.choice(ACTIONS)
-    food = get_random_food_position(snake)
-    visited_positions.clear()
-    visited_positions.add(snake[0])
-    return snake, direction, food
-
-
-# Get random position for food
+# ------------------------------------
+# Utility Functions
+# ------------------------------------
 def get_random_food_position(snake):
     while True:
-        x = random.randint(0, (WIDTH - SNAKE_BLOCK) // SNAKE_BLOCK) * SNAKE_BLOCK
-        y = random.randint(0, (HEIGHT - SNAKE_BLOCK) // SNAKE_BLOCK) * SNAKE_BLOCK
+        x = random.randrange(0, WIDTH, SNAKE_BLOCK)
+        y = random.randrange(0, HEIGHT, SNAKE_BLOCK)
         if (x, y) not in snake:
             return (x, y)
 
+def initialize_game():
+    snake = [(WIDTH // 2, HEIGHT // 2)]
+    food = get_random_food_position(snake)
+    return snake, food
 
-# Calculate new position based on action
-def get_new_position(position, action):
-    x, y = position
+def get_new_position(pos, action):
+    x, y = pos
     if action == "UP":
         y -= SNAKE_BLOCK
     elif action == "DOWN":
@@ -77,143 +58,108 @@ def get_new_position(position, action):
         x -= SNAKE_BLOCK
     elif action == "RIGHT":
         x += SNAKE_BLOCK
-    return x, y
+    return (x, y)
 
-
-# Check if the snake has collided with the walls or itself
 def is_collision(snake):
     head = snake[0]
-    if head[0] >= WIDTH or head[0] < 0 or head[1] >= HEIGHT or head[1] < 0:
+    if head[0] < 0 or head[0] >= WIDTH or head[1] < 0 or head[1] >= HEIGHT:
         return True
     if head in snake[1:]:
         return True
     return False
 
-
-# Get state representation
+# ------------------------------------
+# Improved State Representation
+# ------------------------------------
 def get_state(snake, food):
     head = snake[0]
-    food_direction = (
-        1 if food[0] > head[0] else -1 if food[0] < head[0] else 0,
-        1 if food[1] > head[1] else -1 if food[1] < head[1] else 0,
-    )
 
-    if len(snake) > 1:
-        body_direction = (
-            1 if snake[1][0] > head[0] else -1 if snake[1][0] < head[0] else 0,
-            1 if snake[1][1] > head[1] else -1 if snake[1][1] < head[1] else 0,
-        )
-    else:
-        body_direction = (0, 0)
+    danger_up = (head[0], head[1] - SNAKE_BLOCK) in snake or head[1] - SNAKE_BLOCK < 0
+    danger_down = (head[0], head[1] + SNAKE_BLOCK) in snake or head[1] + SNAKE_BLOCK >= HEIGHT
+    danger_left = (head[0] - SNAKE_BLOCK, head[1]) in snake or head[0] - SNAKE_BLOCK < 0
+    danger_right = (head[0] + SNAKE_BLOCK, head[1]) in snake or head[0] + SNAKE_BLOCK >= WIDTH
 
-    return (food_direction, body_direction)
+    food_dir_x = 1 if food[0] > head[0] else -1 if food[0] < head[0] else 0
+    food_dir_y = 1 if food[1] > head[1] else -1 if food[1] < head[1] else 0
 
+    return (danger_up, danger_down, danger_left, danger_right, food_dir_x, food_dir_y)
 
-# Get action from Q-table or move toward food
 def get_action(state, epsilon):
     if state not in q_table:
-        q_table[state] = {a: 0 for a in ACTIONS}  # Initialize the state in the Q-table
+        q_table[state] = {a: 0 for a in ACTIONS}
 
     if np.random.rand() < epsilon:
-        food_direction = state[0]
-        if food_direction == (1, 0):
-            return "RIGHT"
-        elif food_direction == (-1, 0):
-            return "LEFT"
-        elif food_direction == (0, 1):
-            return "DOWN"
-        elif food_direction == (0, -1):
-            return "UP"
+        return random.choice(ACTIONS)
     return max(q_table[state], key=q_table[state].get)
 
-
-# Update Q-table
-def update_q_table(state, action, reward, next_state):
-    if state not in q_table:
-        q_table[state] = {a: 0 for a in ACTIONS}
+def update_q(state, action, reward, next_state):
     if next_state not in q_table:
         q_table[next_state] = {a: 0 for a in ACTIONS}
-    old_value = q_table[state][action]
-    next_max = max(q_table[next_state].values())
-    q_table[state][action] = old_value + ALPHA * (reward + GAMMA * next_max - old_value)
 
+    old = q_table[state][action]
+    future = max(q_table[next_state].values())
+    q_table[state][action] = old + ALPHA * (reward + GAMMA * future - old)
 
-# Main game loop
+# ------------------------------------
+# Main Game Loop
+# ------------------------------------
 def main():
-    global EPSILON, generation_counter, high_score, last_move_time
+    global EPSILON, generation, high_score
+
     while True:
-        snake, direction, food = initialize_game()
+        snake, food = initialize_game()
         score = 0
-        while True:
+        last_move_time = pygame.time.get_ticks()
+        game_over = False
+
+        while not game_over:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     quit()
 
-            # Cooldown mechanism
-            current_time = pygame.time.get_ticks()
-            if current_time - last_move_time >= cooldown_time:
-                # Get current state and action
-                state = get_state(snake, food)
-                action = get_action(state, EPSILON)
-                last_move_time = current_time
+            state = get_state(snake, food)
+            action = get_action(state, EPSILON)
 
-                # Update snake position
-                new_head = get_new_position(snake[0], action)
-                snake = [new_head] + snake[:-1]
+            new_head = get_new_position(snake[0], action)
+            snake.insert(0, new_head)
 
-                # Check for collision
-                if is_collision(snake):
-                    reward = -100  # Higher penalty for collisions
-                    update_q_table(state, action, reward, None)
-                    generation_counter += 1
-                    break
+            if is_collision(snake):
+                reward = -100
+                q_table[state][action] += ALPHA * (reward - q_table[state][action])
+                game_over = True
+                generation += 1
+                break
 
-                # Check if food is eaten
-                if snake[0] == food:
-                    snake.append(snake[-1])
-                    food = get_random_food_position(snake)
-                    reward = 100  # Higher reward for eating food
-                    score += 1
-                else:
-                    # Penalty for moving to a previously visited position
-                    if snake[0] not in visited_positions:
-                        reward = 0.1
-                        visited_positions.add(snake[0])
-                    else:
-                        reward = -0.1  # Small penalty to encourage exploration
+            if new_head == food:
+                food = get_random_food_position(snake)
+                reward = 100
+                score += 1
+            else:
+                snake.pop()
+                reward = 1 if abs(food[0] - new_head[0]) + abs(food[1] - new_head[1]) < \
+                            abs(food[0] - snake[1][0]) + abs(food[1] - snake[1][1]) else -1
 
-                # Update Q-table
-                next_state = get_state(snake, food)
-                update_q_table(state, action, reward, next_state)
+            next_state = get_state(snake, food)
+            update_q(state, action, reward, next_state)
 
-                # Decay epsilon
-                EPSILON = max(MIN_EPSILON, EPSILON * EPSILON_DECAY)
+            EPSILON = max(MIN_EPSILON, EPSILON * EPSILON_DECAY)
 
-            # Draw everything
+            # Drawing
             display.fill(BLACK)
             for block in snake:
-                pygame.draw.rect(display, GREEN, [block[0], block[1], SNAKE_BLOCK, SNAKE_BLOCK])
-                # Draw black grid lines on each block to enhance visibility
-                pygame.draw.rect(display, BLACK, [block[0], block[1], SNAKE_BLOCK, SNAKE_BLOCK], 1)
-            pygame.draw.rect(display, RED, [food[0], food[1], SNAKE_BLOCK, SNAKE_BLOCK])
+                pygame.draw.rect(display, GREEN, (*block, SNAKE_BLOCK, SNAKE_BLOCK))
+            pygame.draw.rect(display, RED, (*food, SNAKE_BLOCK, SNAKE_BLOCK))
 
-            # Display generation counter, high score, and current score
-            font = pygame.font.SysFont(None, 35)
-            gen_text = font.render(f"Generation: {generation_counter}", True, WHITE)
-            high_score_text = font.render(f"High Score: {high_score}", True, WHITE)
-            current_score_text = font.render(f"Current Score: {score}", True, WHITE)
-            display.blit(gen_text, [WIDTH - 240, 10])
-            display.blit(high_score_text, [10, 10])
-            display.blit(current_score_text, [WIDTH - 240, HEIGHT - 30])
+            font = pygame.font.SysFont(None, 30)
+            display.blit(font.render(f"Gen: {generation}", True, WHITE), (10, 10))
+            display.blit(font.render(f"Score: {score}", True, WHITE), (10, 40))
+            display.blit(font.render(f"High: {high_score}", True, WHITE), (10, 70))
 
             pygame.display.update()
             clock.tick(SNAKE_SPEED)
 
-        # Update high score
-        if score > high_score:
-            high_score = score
-
+        high_score = max(high_score, score)
 
 if __name__ == "__main__":
     main()
